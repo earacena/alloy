@@ -26,10 +26,17 @@ struct Id3v2ExtendedHeader {
 }
 
 #[derive(Debug)]
-struct Id3v2Frame {
-    identifier: String,
-    size: u32,
+struct Id3v2FrameHeader {
+    identifier: [u8; 4],
+    size: u32, // 4 bytes representing a 32 bit safesynch integer
     flags: [u8; 2],
+}
+
+#[derive(Debug)]
+struct Id3v2Frame {
+    header: Id3v2FrameHeader,
+    field_encoding: Option<u8>, // some fields may encode a byte for encoding type
+    field: Vec<u8>,
 }
 
 fn convert_safesynch_to_u32(byte0: u8, byte1: u8, byte2: u8, byte3: u8) -> u32 {
@@ -143,6 +150,75 @@ fn extract_tag(bytes: &Vec<u8>) -> Vec<u8> {
     bytes[..total_tag_size].to_vec()
 }
 
+fn parse_frame(bytes: &Vec<u8>) -> Id3v2Frame {
+    let identifier = [
+        bytes[0], 
+        bytes[1], 
+        bytes[2], 
+        bytes[3]
+    ];
+    let size = convert_safesynch_to_u32(bytes[4], bytes[5], bytes[6], bytes[7]);
+    let flags = [bytes[8], bytes[9]];
+
+    let header = Id3v2FrameHeader {
+        identifier,
+        size,
+        flags
+    };
+
+    let mut field = bytes[10..].to_vec();
+    let field_encoding: Option<u8> = match field[0] {
+        0x0 => Some(0x0),
+        0x1 => Some(0x1),
+        0x2 => Some(0x2),
+        0x3 => Some(0x3),
+        _ => None
+    };
+
+    // Encoding byte (if present) shouldn't be with field data
+    if field_encoding.is_some() {
+        field = field[1..].to_vec();
+    }
+
+    Id3v2Frame {
+        header,
+        field_encoding,
+        field,
+    }
+}
+
+fn parse_frames(bytes: &Vec<u8>) -> Vec<Id3v2Frame> {
+    let frame_bytes = bytes.clone();
+
+    let mut idx = 0;
+    let mut frames: Vec<Id3v2Frame> = vec![];
+
+    while idx < frame_bytes.len() {
+        let byte0 = frame_bytes[idx];
+        let byte1 = frame_bytes[idx + 1];
+        let byte2 = frame_bytes[idx + 2];
+        let byte3 = frame_bytes[idx + 3];
+
+        // There are no frame identifiers with 0x00 0x00 0x00 0x00
+        // therefore it is padding and end of frames
+        if byte0 == 0x00 && byte1 == 0x00 && byte2 == 0x00 && byte3 == 0x00 {
+            break;
+        }
+        
+        let total_frame_size = convert_safesynch_to_u32(frame_bytes[idx + 4], frame_bytes[idx + 5], frame_bytes[idx + 6], frame_bytes[idx + 7]) + 10;
+
+        let start = idx;
+        let end = idx + usize::try_from(total_frame_size).unwrap();
+
+        let unparsed_frame_bytes = &frame_bytes[start..end].to_vec();
+
+        frames.push(parse_frame(unparsed_frame_bytes));
+        idx += end + 1;
+    }
+
+    frames
+}
+
 fn main() {
     let path = std::env::args().nth(1).expect("must give a path");
     let bytes = fs::read(path).expect("unable to read file");
@@ -181,10 +257,13 @@ fn main() {
         && id3v2_bytes[id3v2_bytes.len() - 10] == 0x44
         && id3v2_bytes[id3v2_bytes.len() - 11] == 0x49;
 
+    // header is always 10 bytes
+    // extended header might or might not be present
+    // frames start after extended up to footer
     let frames_start = if extended_header.is_some() {
-        usize::try_from(header.size + extended_header.as_ref().unwrap().size + 10).unwrap()
+        usize::try_from(extended_header.as_ref().unwrap().size + 10).unwrap()
     } else {
-        usize::try_from(header.size + 10).unwrap()
+        10
     };
 
     let frames_end = if footer_present {
@@ -193,7 +272,8 @@ fn main() {
         id3v2_bytes.len()
     };
 
-    let frame_bytes = &id3v2_bytes[frames_start..frames_end];
+    let frame_bytes = &id3v2_bytes[frames_start..frames_end].to_vec();
+    let frames = parse_frames(frame_bytes);
 
     let footer_bytes = if footer_present {
         Some(&id3v2_bytes[frames_end + 1..])
@@ -201,8 +281,9 @@ fn main() {
         None
     };
 
+
     println!("\nheader: {:#04X?}", header);
     println!("extended header: {:#04X?}", extended_header);
-    println!("frame_bytes: {:#04X?}", frame_bytes);
+    println!("frames: {:#04X?}", frames);
     println!("footer_bytes: {:#04X?}", footer_bytes);
 }
