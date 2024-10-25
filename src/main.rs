@@ -39,6 +39,13 @@ struct Id3v2Frame {
     field: Vec<u8>,
 }
 
+struct Id3v2Tag {
+    header: Id3v2Header,
+    extended_header: Id3v2ExtendedHeader,
+    frames: Vec<Id3v2Frame>,
+    footer: Id3v2Header,
+}
+
 fn convert_safesynch_to_u32(byte0: u8, byte1: u8, byte2: u8, byte3: u8) -> u32 {
     u32::from(byte0) << 21 | u32::from(byte1) << 14 | u32::from(byte2) << 7 | u32::from(byte3)
 }
@@ -86,25 +93,6 @@ fn parse_extended_header(bytes: &Vec<u8>) -> Id3v2ExtendedHeader {
         None
     };
 
-    println!("extended_header_size: {:#?}", size);
-    // println!("extended_header_size_bytes: {:#04X?}", extended_header_size_bytes);
-    println!(
-        "extended_header_number_flag_bytes: {:#?}",
-        number_of_flag_bytes
-    );
-    println!("extended_header_flags: {:#?}", flags);
-    println!("b_flag_length: {:#?}", b_flag_length);
-    println!("c_flag_length: {:#?}", c_flag_length);
-    println!("total_frame_crc: {:#?}", total_frame_crc);
-    println!("d_flag_length: {:#?}", d_flag_length);
-    println!(
-        "restrictions: {:#08b}",
-        match restrictions {
-            Some(x) => x,
-            None => 0,
-        }
-    );
-
     Id3v2ExtendedHeader {
         size,
         number_of_flag_bytes,
@@ -151,19 +139,14 @@ fn extract_tag(bytes: &Vec<u8>) -> Vec<u8> {
 }
 
 fn parse_frame(bytes: &Vec<u8>) -> Id3v2Frame {
-    let identifier = [
-        bytes[0], 
-        bytes[1], 
-        bytes[2], 
-        bytes[3]
-    ];
+    let identifier = [bytes[0], bytes[1], bytes[2], bytes[3]];
     let size = convert_safesynch_to_u32(bytes[4], bytes[5], bytes[6], bytes[7]);
     let flags = [bytes[8], bytes[9]];
 
     let header = Id3v2FrameHeader {
         identifier,
         size,
-        flags
+        flags,
     };
 
     let mut field = bytes[10..].to_vec();
@@ -172,7 +155,7 @@ fn parse_frame(bytes: &Vec<u8>) -> Id3v2Frame {
         0x1 => Some(0x1),
         0x2 => Some(0x2),
         0x3 => Some(0x3),
-        _ => None
+        _ => None,
     };
 
     // Encoding byte (if present) shouldn't be with field data
@@ -204,8 +187,13 @@ fn parse_frames(bytes: &Vec<u8>) -> Vec<Id3v2Frame> {
         if byte0 == 0x00 && byte1 == 0x00 && byte2 == 0x00 && byte3 == 0x00 {
             break;
         }
-        
-        let total_frame_size = convert_safesynch_to_u32(frame_bytes[idx + 4], frame_bytes[idx + 5], frame_bytes[idx + 6], frame_bytes[idx + 7]) + 10;
+
+        let total_frame_size = convert_safesynch_to_u32(
+            frame_bytes[idx + 4],
+            frame_bytes[idx + 5],
+            frame_bytes[idx + 6],
+            frame_bytes[idx + 7],
+        ) + 10;
 
         let start = idx;
         let end = idx + usize::try_from(total_frame_size).unwrap();
@@ -217,6 +205,110 @@ fn parse_frames(bytes: &Vec<u8>) -> Vec<Id3v2Frame> {
     }
 
     frames
+}
+
+fn get_field_name(identifier: [u8; 4]) -> String {
+    let binding = String::from_utf8(identifier.to_vec()).unwrap();
+    let ascii_id = binding.as_str();
+
+    match ascii_id {
+        "AENC" => "Audio encryption".to_string(),
+        "APIC" => "Attached picture".to_string(),
+        "ASPI" => "Audio seek point index".to_string(),
+        "COMM" => "Comments".to_string(),
+        "COMR" => "Commercial frame".to_string(),
+
+        "ENCR" => "Encryption method registration".to_string(),
+        "EQU2" => "Equalisation (2)".to_string(),
+        "ETCO" => "Event timing codes".to_string(),
+
+        "GEOB" => "General encapsulated object".to_string(),
+        "GRID" => "Group identification registration".to_string(),
+
+        "LINK" => "Linked information".to_string(),
+
+        "MCDI" => "Music CD identifier".to_string(),
+        "MLLT" => "MPEG location lookup table".to_string(),
+
+        "OWNE" => "Ownership frame".to_string(),
+
+        "PRIV" => "Private frame".to_string(),
+        "PCNT" => "Play counter".to_string(),
+        "POPM" => "Popularimeter".to_string(),
+        "POSS" => "Position synchronisation frame".to_string(),
+
+        "RBUF" => "Recommended buffer size".to_string(),
+        "RVA2" => "Relative volume adjustment (2)".to_string(),
+        "RVRB" => "Reverb".to_string(),
+
+        "SEEK" => "Seek frame".to_string(),
+        "SIGN" => "Signature frame".to_string(),
+        "SYLT" => "Synchronised lyric/text".to_string(),
+        "SYTC" => "Synchronised tempo codes".to_string(),
+
+        "TALB" => "Album/Movie/Show title".to_string(),
+        "TBPM" => "BPM (beats per minute)".to_string(),
+        "TCOM" => "Composer".to_string(),
+        "TCON" => "Content type".to_string(),
+        "TCOP" => "Copyright message".to_string(),
+        "TDEN" => "Encoding time".to_string(),
+        "TDLY" => "Playlist delay".to_string(),
+        "TDOR" => "Original release time".to_string(),
+        "TDRC" => "Recording time".to_string(),
+        "TDRL" => "Release time".to_string(),
+        "TDTG" => "Tagging time".to_string(),
+        "TENC" => "Encoded by".to_string(),
+        "TEXT" => "Lyricist/Text writer".to_string(),
+        "TFLT" => "File type".to_string(),
+        "TIPL" => "Involved people list".to_string(),
+        "TIT1" => "Content group description".to_string(),
+        "TIT2" => "Title/songname/content description".to_string(),
+        "TIT3" => "Subtitle/Description refinement".to_string(),
+        "TKEY" => "Initial key".to_string(),
+        "TLAN" => "Language(s)".to_string(),
+        "TLEN" => "Length".to_string(),
+        "TMCL" => "Musician credits list".to_string(),
+        "TMED" => "Media type".to_string(),
+        "TMOO" => "Mood".to_string(),
+        "TOAL" => "Original album/movie/show title".to_string(),
+        "TOFN" => "Original filename".to_string(),
+        "TOLY" => "Original lyricist(s)/text writer(s)".to_string(),
+        "TOPE" => "Original artist(s)/performer(s)".to_string(),
+        "TOWN" => "File owner/licensee".to_string(),
+        "TPE1" => "Lead performer(s)/Soloist(s)".to_string(),
+        "TPE2" => "Band/orchestra/accompaniment".to_string(),
+        "TPE3" => "Conductor/performer refinement".to_string(),
+        "TPE4" => "Interpreted, remixed, or otherwise modified by".to_string(),
+        "TPOS" => "Part of a set".to_string(),
+        "TPRO" => "Produced notice".to_string(),
+        "TPUB" => "Publisher".to_string(),
+        "TRCK" => "Track number/Position in set".to_string(),
+        "TRSN" => "Internet radio station name".to_string(),
+        "TRSO" => "Internet radio station owner".to_string(),
+        "TSOA" => "Album sort order".to_string(),
+        "TSOP" => "Performer sort order".to_string(),
+        "TSOT" => "Title sort order".to_string(),
+        "TSRC" => "ISRC (international standard recording code)".to_string(),
+        "TSSE" => "Software/Hardware and settings used for encoding".to_string(),
+        "TSST" => "Set subtitle".to_string(),
+        "TXXX" => "User defined text information frame".to_string(),
+
+        "UFID" => "Unique file identifier".to_string(),
+        "USER" => "Terms of use".to_string(),
+        "USLT" => "Unsynchronised lyric/text transcription".to_string(),
+
+        "WCOM" => "Commercial information".to_string(),
+        "WCOP" => "Copyright/Legal information".to_string(),
+        "WOAF" => "Official audio file webpage".to_string(),
+        "WOAR" => "Official artist/performer webpage".to_string(),
+        "WOAS" => "Official audio source webpage".to_string(),
+        "WORS" => "Official Internet radio station homepage".to_string(),
+        "WPAY" => "Payment".to_string(),
+        "WPUB" => "Publishers official webpage".to_string(),
+        "WXXX" => "User defined URL link frame".to_string(),
+
+        _ => "Unknown frame".to_string(),
+    }
 }
 
 fn main() {
@@ -274,16 +366,15 @@ fn main() {
 
     let frame_bytes = &id3v2_bytes[frames_start..frames_end].to_vec();
     let frames = parse_frames(frame_bytes);
-
-    let footer_bytes = if footer_present {
-        Some(&id3v2_bytes[frames_end + 1..])
+    let footer: Option<Id3v2Header> = if footer_present {
+        Some(parse_header(&id3v2_bytes[frames_end + 1..].to_vec()))
     } else {
         None
     };
 
-
-    println!("\nheader: {:#04X?}", header);
+    println!("");
+    println!("header: {:#04X?}", header);
     println!("extended header: {:#04X?}", extended_header);
     println!("frames: {:#04X?}", frames);
-    println!("footer_bytes: {:#04X?}", footer_bytes);
+    println!("footer: {:#04X?}", footer);
 }
