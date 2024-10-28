@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fmt::format, fs};
 
 // An ID3v2 tag can be detected with the following pattern:
 //      $49 44 33 yy yy xx zz zz zz zz
@@ -9,6 +9,7 @@ use std::fs;
 enum MimeType {
     Png,
     Jpeg,
+    Unknown,
 }
 
 #[derive(Debug)]
@@ -22,6 +23,7 @@ impl MimeType {
         match self {
             MimeType::Jpeg => "image/jpeg".to_string(),
             MimeType::Png => "image/png".to_string(),
+            MimeType::Unknown => "image/".to_string(),
         }
     }
 
@@ -116,11 +118,11 @@ struct Picture {
 
 impl Picture {
     fn into_bytes(&self) -> Vec<u8> {
-        let mut description_bytes = self.description.into_bytes();
+        let mut description_bytes = self.description.clone().into_bytes();
         description_bytes.push(0x00);
         let mut mime_bytes = self.mime.to_string().into_bytes();
         mime_bytes.push(0x00);
-        [mime_bytes, vec![self.picture_type], description_bytes, self.data.clone()].concat()
+        [mime_bytes, vec![self.picture_type], description_bytes.to_vec(), self.data.clone()].concat()
     }
 
     fn size(&self) -> usize {
@@ -346,11 +348,9 @@ impl Id3v2Tag {
 
     fn set_cover_art(
         &mut self,
-        cover_art_bytes: Vec<u8>,
-        picture_description: String,
-        mime_type: MimeType,
+        picture: Picture
     ) -> Result<(), String> {
-        match self.set_attached_picture_frame(cover_art_bytes, picture_description, mime_type) {
+        match self.set_attached_picture_frame(picture) {
             Ok(()) => Ok(()),
             Err(x) => Err(x),
         }
@@ -443,8 +443,6 @@ fn parse_tag(id3v2_bytes: &Vec<u8>) -> Result<Id3v2Tag, String> {
     println!("");
     println!("header: {:#04X?}", header);
     println!("extended header: {:#04X?}", extended_header);
-    println!("frames: {:#04X?}", frames);
-    println!("footer: {:#04X?}", footer);
 
     let tag = Id3v2Tag {
         header,
@@ -551,7 +549,59 @@ fn extract_tag(bytes: &Vec<u8>) -> (Vec<u8>, Vec<u8>) {
     )
 }
 
-fn parse_frame(bytes: &Vec<u8>) -> Frame {
+fn extract_picture(encoding: u8, bytes: &Vec<u8>) -> Result<Picture, String> {
+    let mut mime_bytes: Vec<u8> = vec![];
+    let mut picture_type_byte = 0x03;
+    let mut description_bytes: Vec<u8> = vec![];
+    let mut data_bytes: Vec<u8> = vec![];
+
+    let mut stage = "mime";
+
+    for byte in bytes.iter() {
+        match stage {
+            "mime" => {
+                if *byte == 0x00 {
+                    stage = "type";
+                } else {
+                    mime_bytes.push(*byte);
+                }
+            },
+            "type" => {
+                picture_type_byte = *byte;
+                stage = "description";
+            },
+            "description" => {
+                if *byte == 0x00 {
+                    stage = "data";
+                } else {
+                    description_bytes.push(*byte);
+                }
+            },
+            "data" => {
+                data_bytes.push(*byte);
+            },
+            &_ => {
+                return Err("warning unknown stage while extracting picture".to_string())
+            }
+
+        }
+    }
+
+    Ok(Picture {
+        encoding,
+        mime: match String::from_utf8(mime_bytes).unwrap().as_str() {
+            "image/png" => MimeType::Png,
+            "image/jpeg" => MimeType::Jpeg,
+            _ => MimeType::Unknown,
+        },
+        picture_type: picture_type_byte,
+        description: String::from_utf8(description_bytes).unwrap(),
+        data: data_bytes,
+    })
+
+}
+
+fn parse_frame(bytes: &Vec<u8>) -> Result<Frame, String> {
     let identifier = [bytes[0], bytes[1], bytes[2], bytes[3]];
     let size = convert_safesynch_to_u32(bytes[4], bytes[5], bytes[6], bytes[7]);
     let flags = [bytes[8], bytes[9]];
@@ -562,8 +612,8 @@ fn parse_frame(bytes: &Vec<u8>) -> Frame {
         flags,
     };
 
-    let mut field = bytes[10..].to_vec();
-    let field_encoding: Option<u8> = match field[0] {
+    let mut data = bytes[10..].to_vec();
+    let data_encoding: Option<u8> = match data[0] {
         0x0 => Some(0x0),
         0x1 => Some(0x1),
         0x2 => Some(0x2),
@@ -572,20 +622,36 @@ fn parse_frame(bytes: &Vec<u8>) -> Frame {
     };
 
     // Encoding byte (if present) shouldn't be with field data
-    if field_encoding.is_some() {
-        field = field[1..].to_vec();
+    if data_encoding.is_some() {
+        data = data[1..].to_vec();
     }
 
-    match identifier {
-        
-    }
-    Frame::Id3v2TextFrame {
-        header,
-        data_encoding,
-        data,
-        mime_type: todo!(),
-        picture_type: todo!(),
-        picture_description: todo!(),
+    let binding = String::from_utf8(identifier.to_vec()).unwrap();
+    let ascii_id = binding.as_str();
+
+    match ascii_id {
+        "TIT2" | "TALB" | "TPE1" => Ok(Frame::Text(Id3v2TextFrame {
+            header,
+            data_encoding,
+            data,
+        })),
+        "APIC" => {
+            let extracted_picture = extract_picture(data_encoding.unwrap(), &data).unwrap();
+            
+            Ok(Frame::Picture(Id3v2PictureFrame {
+                header,
+                picture: Picture {
+                    encoding: data_encoding.unwrap(),
+                    mime: extracted_picture.mime,
+                    picture_type: extracted_picture.picture_type,
+                    description: extracted_picture.description,
+                    data: extracted_picture.data,
+                }
+            }))
+        },
+        _ => {
+            Err(format!("Unknown frame id {}", ascii_id))
+        }
     }
 }
 
@@ -593,7 +659,7 @@ fn parse_frames(bytes: &Vec<u8>) -> Vec<Frame> {
     let frame_bytes = bytes.clone();
 
     let mut idx = 0;
-    let mut frames: Vec<Id3v2Frame> = vec![];
+    let mut frames: Vec<Frame> = vec![];
 
     while idx < frame_bytes.len() {
         let byte0 = frame_bytes[idx];
@@ -619,7 +685,7 @@ fn parse_frames(bytes: &Vec<u8>) -> Vec<Frame> {
 
         let unparsed_frame_bytes = &frame_bytes[start..end].to_vec();
 
-        frames.push(parse_frame(unparsed_frame_bytes));
+        frames.push(parse_frame(unparsed_frame_bytes).unwrap());
         idx += end + 1;
     }
 
