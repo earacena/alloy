@@ -15,7 +15,7 @@ enum MimeType {
 #[derive(Debug)]
 enum Frame {
     Text(Id3v2TextFrame),
-    Picture(Id3v2PictureFrame)
+    Picture(Id3v2PictureFrame),
 }
 
 impl MimeType {
@@ -43,7 +43,7 @@ struct Id3v2Header {
 }
 
 impl Id3v2Header {
-    fn into_bytes(self) -> Vec<u8> {
+    fn into_bytes(&self) -> Vec<u8> {
         let identifier_bytes = self.identifier.to_vec();
         let version_bytes = self.version.to_vec();
         let flag_bytes = vec![self.flags];
@@ -54,12 +54,22 @@ impl Id3v2Header {
 }
 
 fn convert_u32_to_safesynch(value: u32) -> [u8; 4] {
-    let byte0: u8 = u8::try_from((value & 0b00001111111000000000000000000000) >> 28).unwrap();
+    let byte0: u8 = u8::try_from((value & 0b00001111111000000000000000000000) >> 21).unwrap();
     let byte1: u8 = u8::try_from((value & 0b00000000000111111100000000000000) >> 14).unwrap();
     let byte2: u8 = u8::try_from((value & 0b00000000000000000011111110000000) >> 7).unwrap();
     let byte3: u8 = u8::try_from(value & 0b00000000000000000000000001111111).unwrap();
 
     [byte0, byte1, byte2, byte3]
+}
+
+fn convert_u64_to_safesynch(value: u64) -> [u8; 5] {
+    let byte0: u8 = u8::try_from((value & 0b11111110000000000000000000000000000) >> 28).unwrap();
+    let byte1: u8 = u8::try_from((value & 0b00001111111000000000000000000000) >> 21).unwrap();
+    let byte2: u8 = u8::try_from((value & 0b00000000000111111100000000000000) >> 14).unwrap();
+    let byte3: u8 = u8::try_from((value & 0b00000000000000000011111110000000) >> 7).unwrap();
+    let byte4: u8 = u8::try_from(value  & 0b00000000000000000000000001111111).unwrap();
+
+    [byte0, byte1, byte2, byte3, byte4]
 }
 
 #[derive(Debug)]
@@ -74,6 +84,37 @@ struct Id3v2ExtendedHeader {
     restrictions: Option<u8>,
 }
 
+impl Id3v2ExtendedHeader {
+    fn into_bytes(&self) -> Vec<u8> {
+        let size_bytes = convert_u32_to_safesynch(self.size).to_vec();
+        let number_of_flag_bytes_vec = vec![self.number_of_flag_bytes];
+        let flag_byte = vec![self.flags];
+        let b_flag_length_byte = vec![self.b_flag_length];
+        let c_flag_length_byte = vec![self.c_flag_length];
+        let crc_bytes = match self.total_frame_crc {
+            Some(crc) => convert_u64_to_safesynch(crc).to_vec(),
+            None => vec![],
+        };
+        let d_flag_length_byte = vec![self.d_flag_length];
+        let restrictions = match self.restrictions {
+            Some(r) => vec![r],
+            None => vec![],
+        };
+
+        [
+            size_bytes,
+            number_of_flag_bytes_vec,
+            flag_byte,
+            b_flag_length_byte,
+            c_flag_length_byte,
+            crc_bytes,
+            d_flag_length_byte,
+            restrictions,
+        ]
+        .concat()
+    }
+}
+
 #[derive(Debug)]
 struct Id3v2FrameHeader {
     identifier: [u8; 4],
@@ -85,6 +126,14 @@ impl Id3v2FrameHeader {
     fn id_str(&self) -> String {
         String::from_utf8(self.identifier.to_vec()).unwrap()
     }
+
+    fn into_bytes(&self) -> Vec<u8> {
+        let identifier_bytes = self.identifier.to_vec();
+        let size_bytes = convert_u32_to_safesynch(self.size).to_vec();
+        let flag_bytes = self.flags.to_vec();
+
+        [identifier_bytes, size_bytes, flag_bytes].concat()
+    }
 }
 
 #[derive(Debug)]
@@ -94,12 +143,36 @@ struct Id3v2TextFrame {
     data: Vec<u8>,
 }
 
+impl Id3v2TextFrame {
+    fn into_bytes(&self) -> Vec<u8> {
+        let header_bytes = self.header.into_bytes();
+        let encoding_byte = match self.data_encoding {
+            Some(x) => vec![x],
+            None => vec![]
+        };
+        let data_bytes = self.data.clone();
+
+
+        [header_bytes, encoding_byte, data_bytes].concat()
+    }
+}
+
 #[derive(Debug)]
 struct Id3v2PictureFrame {
     header: Id3v2FrameHeader,
-    picture: Picture
+    picture: Picture,
 }
 
+impl Id3v2PictureFrame {
+    fn into_bytes(&self) -> Vec<u8> {
+        let header_bytes = self.header.into_bytes();
+        let picture_bytes = self.picture.into_bytes();
+
+        [header_bytes, picture_bytes].concat()
+    }
+}
+
+#[derive(Debug)]
 struct Id3v2Tag {
     header: Id3v2Header,
     extended_header: Option<Id3v2ExtendedHeader>,
@@ -109,9 +182,9 @@ struct Id3v2Tag {
 
 #[derive(Debug)]
 struct Picture {
-    encoding: u8,                   // 0x03 for utf-8
+    encoding: u8, // 0x03 for utf-8
     mime: MimeType,
-    picture_type: u8,               // 0x03 for cover art
+    picture_type: u8, // 0x03 for cover art
     description: String,
     data: Vec<u8>,
 }
@@ -122,7 +195,13 @@ impl Picture {
         description_bytes.push(0x00);
         let mut mime_bytes = self.mime.to_string().into_bytes();
         mime_bytes.push(0x00);
-        [mime_bytes, vec![self.picture_type], description_bytes.to_vec(), self.data.clone()].concat()
+        [
+            mime_bytes,
+            vec![self.picture_type],
+            description_bytes.to_vec(),
+            self.data.clone(),
+        ]
+        .concat()
     }
 
     fn size(&self) -> usize {
@@ -136,9 +215,9 @@ impl Id3v2Tag {
             match frame {
                 Frame::Text(x) => {
                     if x.header.id_str() == frame_id {
-                        return Some(frame)
+                        return Some(frame);
                     }
-                },
+                }
                 Frame::Picture(x) => {
                     if x.header.id_str() == frame_id {
                         return Some(frame);
@@ -150,27 +229,6 @@ impl Id3v2Tag {
         }
 
         return None;
-    }
-
-    fn frame_exists(&self, frame_id: &str) -> bool {
-        for frame in self.frames.iter() {
-            match frame {
-                Frame::Text(x) => {
-                    if x.header.id_str() == frame_id {
-                        return true;
-                    }
-                },
-                Frame::Picture(x) => {
-                    if x.header.id_str() == frame_id {
-                        return true;
-                    }
-                }
-            }
-
-            continue;
-        }
-
-        return false;
     }
 
     fn new(id3v2_bytes: &Vec<u8>) -> Result<Self, String> {
@@ -230,12 +288,6 @@ impl Id3v2Tag {
             None
         };
 
-        println!("");
-        println!("header: {:#04X?}", header);
-        println!("extended header: {:#04X?}", extended_header);
-        println!("frames: {:#04X?}", frames);
-        println!("footer: {:#04X?}", footer);
-
         Ok(Self {
             header,
             extended_header,
@@ -267,7 +319,10 @@ impl Id3v2Tag {
         Id3v2PictureFrame {
             header: Id3v2FrameHeader {
                 identifier: [id_bytes[0], id_bytes[1], id_bytes[2], id_bytes[3]],
-                size: u32::try_from(picture.data.len()).unwrap() + u32::try_from(picture.description.len()).unwrap() + u32::try_from(mime_bytes.len()).unwrap() + 2,
+                size: u32::try_from(picture.data.len()).unwrap()
+                    + u32::try_from(picture.description.len()).unwrap()
+                    + u32::try_from(mime_bytes.len()).unwrap()
+                    + 2,
                 flags: [0x00, 0x00],
             },
             picture: Picture {
@@ -276,8 +331,7 @@ impl Id3v2Tag {
                 picture_type: 0x03,
                 description: picture.description,
                 data: picture.data,
-            }
-
+            },
         }
     }
 
@@ -287,38 +341,43 @@ impl Id3v2Tag {
             if let Frame::Text(frame) = x {
                 let mut data_bytes = data.into_bytes();
                 data_bytes.push(0x00);
-                
-                frame.header.size -= u32::try_from(frame.data.len()).unwrap();
-                frame.header.size += u32::try_from(data_bytes.len()).unwrap();
-                frame.data = data_bytes;
+
+                frame.header.size += u32::try_from(data_bytes.len() + 1).unwrap();
                 frame.header.flags = [0x00, 0x00];
+                frame.data = data_bytes;
             } else {
                 return Err("attempting to set a non-text frame as a picture frame".to_string());
             }
         } else {
-            self.new_text_frame(frame_id, 0x03, data.into_bytes());
+            let new_frame = Frame::Text(self.new_text_frame(frame_id, 0x03, data.into_bytes()));
+            self.header.size += u32::try_from(match &new_frame {
+                Frame::Text(x) => x.into_bytes().len(),
+                Frame::Picture(x) => x.into_bytes().len(),
+            }).unwrap();
+            self.frames.push(new_frame);
         }
 
         Ok(())
     }
 
-    fn set_attached_picture_frame(
-        &mut self,
-        picture: Picture,
-    ) -> Result<(), String> {
-
+    fn set_attached_picture_frame(&mut self, picture: Picture) -> Result<(), String> {
         let result = self.find_frame("APIC");
         if let Some(x) = result {
             if let Frame::Picture(frame) = x {
-                frame.header.size -= u32::try_from(frame.picture.size()).unwrap();
-                frame.header.size += u32::try_from(picture.size()).unwrap();
-
+                frame.header.size = u32::try_from(picture.size()).unwrap();
                 frame.picture = picture;
             } else {
                 return Err("attempting to set a non-text frame as a picture frame".to_string());
             }
         } else {
-            self.new_attached_picture_frame(picture);
+            let new_frame = Frame::Picture(self.new_attached_picture_frame(picture));
+            
+            self.header.size += u32::try_from(match &new_frame {
+                Frame::Text(x) => x.into_bytes().len(),
+                Frame::Picture(x) => x.into_bytes().len(),
+            }).unwrap();
+            
+            self.frames.push(new_frame);
         }
 
         Ok(())
@@ -346,10 +405,14 @@ impl Id3v2Tag {
         }
     }
 
-    fn set_cover_art(
-        &mut self,
-        picture: Picture
-    ) -> Result<(), String> {
+    fn set_album_artist_name(&mut self, album_artist_name: String) -> Result<(), String> {
+        match self.set_text_frame("TPE2", album_artist_name) {
+            Ok(()) => Ok(()),
+            Err(x) => Err(x),
+        }
+    }
+
+    fn set_cover_art(&mut self, picture: Picture) -> Result<(), String> {
         match self.set_attached_picture_frame(picture) {
             Ok(()) => Ok(()),
             Err(x) => Err(x),
@@ -367,7 +430,10 @@ impl Id3v2Tag {
         }
 
         for frame in self.frames {
-            total_tag_size += frame.header.size + 10;
+            total_tag_size += match frame {
+                Frame::Picture(x) => x.header.size + 10,
+                Frame::Text(x) => x.header.size + 10,
+            };
         }
 
         if self.footer.is_some() {
@@ -377,81 +443,36 @@ impl Id3v2Tag {
         total_tag_size.into()
     }
 
-    fn as_bytes() -> Vec<u8> {
+    fn into_bytes(&self) -> Vec<u8> {
         // Return the stored information as a tag in bytes
-        todo!()
+        let header_bytes = self.header.into_bytes();
+        let extended_header_bytes: Vec<u8> = match &self.extended_header {
+            Some(e) => e.into_bytes(),
+            None => vec![],
+        };
+        let mut frames_bytes: Vec<u8> = vec![];
+        for frame in &self.frames {
+            let mut bytes = match frame {
+                Frame::Text(x) => x.into_bytes(),
+                Frame::Picture(x) => x.into_bytes(),
+            };
+
+            frames_bytes.append(&mut bytes);
+        }
+
+        let footer_bytes: Vec<u8> = match &self.footer {
+            Some(f) => (*f.into_bytes()).to_vec(),
+            None => vec![]
+        };
+
+        [
+            header_bytes,
+            extended_header_bytes,
+            frames_bytes,
+            footer_bytes,
+        ]
+        .concat()
     }
-}
-
-fn parse_tag(id3v2_bytes: &Vec<u8>) -> Result<Id3v2Tag, String> {
-    if id3v2_bytes[0] != 0x49 || id3v2_bytes[1] != 0x44 || id3v2_bytes[2] != 0x33 {
-        // Not an ID3v2 tag
-        return Err(format!(
-            "not a valid ID3v2.4 tag ({:#04X?} {:#04X?} {:#04X?})",
-            id3v2_bytes[0], id3v2_bytes[1], id3v2_bytes[2]
-        ));
-    }
-
-    for byte in id3v2_bytes {
-        print!("{:#04X?} ", byte);
-    }
-
-    let header_bytes = &id3v2_bytes[..10];
-    let header = parse_header(&header_bytes.to_vec());
-    let extended_header = if header.flags & 0b01000000 != 0 {
-        let total_extended_header_size = convert_safesynch_to_u32(
-            id3v2_bytes[11],
-            id3v2_bytes[12],
-            id3v2_bytes[13],
-            id3v2_bytes[14],
-        );
-
-        let total_extended_header_size = usize::try_from(total_extended_header_size).unwrap();
-        let extended_header_bytes = &id3v2_bytes[11..total_extended_header_size].to_vec();
-        Some(parse_extended_header(extended_header_bytes))
-    } else {
-        None
-    };
-
-    let footer_present = id3v2_bytes[id3v2_bytes.len() - 9] == 0x33
-        && id3v2_bytes[id3v2_bytes.len() - 10] == 0x44
-        && id3v2_bytes[id3v2_bytes.len() - 11] == 0x49;
-
-    // header is always 10 bytes
-    // extended header might or might not be present
-    // frames start after extended up to footer
-    let frames_start = if extended_header.is_some() {
-        usize::try_from(extended_header.as_ref().unwrap().size + 10).unwrap()
-    } else {
-        10
-    };
-
-    let frames_end = if footer_present {
-        id3v2_bytes.len() - 10
-    } else {
-        id3v2_bytes.len()
-    };
-
-    let frame_bytes = &id3v2_bytes[frames_start..frames_end].to_vec();
-    let frames = parse_frames(frame_bytes);
-    let footer: Option<Id3v2Header> = if footer_present {
-        Some(parse_header(&id3v2_bytes[frames_end + 1..].to_vec()))
-    } else {
-        None
-    };
-
-    println!("");
-    println!("header: {:#04X?}", header);
-    println!("extended header: {:#04X?}", extended_header);
-
-    let tag = Id3v2Tag {
-        header,
-        extended_header,
-        frames,
-        footer,
-    };
-
-    Ok(tag)
 }
 
 fn convert_safesynch_to_u32(byte0: u8, byte1: u8, byte2: u8, byte3: u8) -> u32 {
@@ -565,25 +586,22 @@ fn extract_picture(encoding: u8, bytes: &Vec<u8>) -> Result<Picture, String> {
                 } else {
                     mime_bytes.push(*byte);
                 }
-            },
+            }
             "type" => {
                 picture_type_byte = *byte;
                 stage = "description";
-            },
+            }
             "description" => {
                 if *byte == 0x00 {
                     stage = "data";
                 } else {
                     description_bytes.push(*byte);
                 }
-            },
+            }
             "data" => {
                 data_bytes.push(*byte);
-            },
-            &_ => {
-                return Err("warning unknown stage while extracting picture".to_string())
             }
-
+            &_ => return Err("warning unknown stage while extracting picture".to_string()),
         }
     }
 
@@ -598,7 +616,6 @@ fn extract_picture(encoding: u8, bytes: &Vec<u8>) -> Result<Picture, String> {
         description: String::from_utf8(description_bytes).unwrap(),
         data: data_bytes,
     })
-
 }
 
 fn parse_frame(bytes: &Vec<u8>) -> Result<Frame, String> {
@@ -630,14 +647,14 @@ fn parse_frame(bytes: &Vec<u8>) -> Result<Frame, String> {
     let ascii_id = binding.as_str();
 
     match ascii_id {
-        "TIT2" | "TALB" | "TPE1" => Ok(Frame::Text(Id3v2TextFrame {
+        "TIT2" | "TALB" | "TPE1" | "TSSE" => Ok(Frame::Text(Id3v2TextFrame {
             header,
             data_encoding,
             data,
         })),
         "APIC" => {
             let extracted_picture = extract_picture(data_encoding.unwrap(), &data).unwrap();
-            
+
             Ok(Frame::Picture(Id3v2PictureFrame {
                 header,
                 picture: Picture {
@@ -646,12 +663,10 @@ fn parse_frame(bytes: &Vec<u8>) -> Result<Frame, String> {
                     picture_type: extracted_picture.picture_type,
                     description: extracted_picture.description,
                     data: extracted_picture.data,
-                }
+                },
             }))
-        },
-        _ => {
-            Err(format!("Unknown frame id {}", ascii_id))
         }
+        _ => Err(format!("Unknown frame id {}", ascii_id)),
     }
 }
 
@@ -795,10 +810,12 @@ fn get_field_name(identifier: [u8; 4]) -> String {
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("must give a path");
-    let bytes = fs::read(path).expect("unable to read file");
+    let path = std::env::args().nth(1).expect("path must be given");
+    let bytes = fs::read(path.clone()).expect("unable to read file");
 
     let (id3v2_bytes, audio_data) = extract_tag(&bytes);
+
+    println!("First Music Byte: {:#04X?}", audio_data[0]);
 
     let mut tag: Id3v2Tag = match Id3v2Tag::new(&id3v2_bytes) {
         Ok(x) => x,
@@ -808,18 +825,28 @@ fn main() {
         }
     };
 
-    let cover_art_path = "./test.png";
-    let cover_art_bytes = fs::read(cover_art_path).expect("unable to read file");
+    let cover_art_path = "./test.jpg";
+    let cover_art_bytes = fs::read(cover_art_path).expect("file must exist");
 
-    tag.set_song_title("Tag of Test".to_string());
-    tag.set_song_artist("MC Test".to_string());
-    tag.set_album_title("Testphonics".to_string());
-    tag.set_album_artist("MC Test".to_string());
+    tag.set_song_title("Tag of Test".to_string()).unwrap();
+    tag.set_song_artist_name("MC Test".to_string()).unwrap();
+    tag.set_album_title("Testphonics".to_string()).unwrap();
+    tag.set_album_artist_name("MC Test".to_string()).unwrap();
     tag.set_cover_art(
-        cover_art_bytes,
-        "A 300x300 picture with the word 'test' in the center".to_string(),
-        MimeType::Jpeg,
-    );
+        Picture {
+            encoding: 0x03,
+            mime: MimeType::Jpeg,
+            picture_type: 0x03,
+            description: "a 300 pixel by 300 pixel picture with a white background and the word 'test' in the center".to_string(),
+            data: cover_art_bytes,
+        }
+    ).unwrap();
 
-    // println!("{}", tag.as_bytes());
+    println!("{:#04X?}", tag);
+    println!("Result: {:#04X?}", tag.into_bytes());
+
+
+    let tagged_path = "./tagged.mp3";
+    let _ = fs::write(tagged_path, [tag.into_bytes(), audio_data].concat());
+    
 }
