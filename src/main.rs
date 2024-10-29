@@ -67,7 +67,7 @@ fn convert_u64_to_safesynch(value: u64) -> [u8; 5] {
     let byte1: u8 = u8::try_from((value & 0b00001111111000000000000000000000) >> 21).unwrap();
     let byte2: u8 = u8::try_from((value & 0b00000000000111111100000000000000) >> 14).unwrap();
     let byte3: u8 = u8::try_from((value & 0b00000000000000000011111110000000) >> 7).unwrap();
-    let byte4: u8 = u8::try_from(value  & 0b00000000000000000000000001111111).unwrap();
+    let byte4: u8 = u8::try_from(value & 0b00000000000000000000000001111111).unwrap();
 
     [byte0, byte1, byte2, byte3, byte4]
 }
@@ -139,21 +139,15 @@ impl Id3v2FrameHeader {
 #[derive(Debug)]
 struct Id3v2TextFrame {
     header: Id3v2FrameHeader,
-    data_encoding: Option<u8>, // some fields may encode a byte for encoding type
-    data: Vec<u8>,
+    info: TextInformation
 }
 
 impl Id3v2TextFrame {
     fn into_bytes(&self) -> Vec<u8> {
-        let header_bytes = self.header.into_bytes();
-        let encoding_byte = match self.data_encoding {
-            Some(x) => vec![x],
-            None => vec![]
-        };
-        let data_bytes = self.data.clone();
-
-
-        [header_bytes, encoding_byte, data_bytes].concat()
+        [
+            self.header.into_bytes(),
+            self.info.into_bytes(),
+        ].concat()
     }
 }
 
@@ -193,12 +187,13 @@ impl Picture {
     fn into_bytes(&self) -> Vec<u8> {
         let mut description_bytes = self.description.clone().into_bytes();
         description_bytes.push(0x00);
-        let mut mime_bytes = self.mime.to_string().into_bytes();
-        mime_bytes.push(0x00);
+        let mime_bytes = self.mime.into_bytes();
+
         [
+            vec![self.encoding],
             mime_bytes,
             vec![self.picture_type],
-            description_bytes.to_vec(),
+            description_bytes,
             self.data.clone(),
         ]
         .concat()
@@ -206,6 +201,21 @@ impl Picture {
 
     fn size(&self) -> usize {
         self.into_bytes().len()
+    }
+}
+
+#[derive(Debug)]
+struct TextInformation {
+    encoding: u8,
+    data: Vec<u8>,
+}
+
+impl TextInformation {
+    fn into_bytes(&self) -> Vec<u8> {
+        [
+            vec![self.encoding],
+            self.data.clone()
+        ].concat()
     }
 }
 
@@ -300,13 +310,14 @@ impl Id3v2Tag {
         let id_bytes = frame_id.as_bytes();
         let new_frame = Id3v2TextFrame {
             header: Id3v2FrameHeader {
-                // TIT2 is
                 identifier: [id_bytes[0], id_bytes[1], id_bytes[2], id_bytes[3]],
                 size: u32::try_from(data.len()).unwrap() + 1,
                 flags: [0x00, 0x00],
             },
-            data_encoding: Some(encoding),
-            data,
+            info: TextInformation {
+                encoding,
+                data,
+            }
         };
 
         new_frame
@@ -314,15 +325,11 @@ impl Id3v2Tag {
 
     fn new_attached_picture_frame(&mut self, picture: Picture) -> Id3v2PictureFrame {
         let id_bytes = "APIC".to_string().into_bytes();
-        let mime_bytes = picture.mime.into_bytes();
 
         Id3v2PictureFrame {
             header: Id3v2FrameHeader {
                 identifier: [id_bytes[0], id_bytes[1], id_bytes[2], id_bytes[3]],
-                size: u32::try_from(picture.data.len()).unwrap()
-                    + u32::try_from(picture.description.len()).unwrap()
-                    + u32::try_from(mime_bytes.len()).unwrap()
-                    + 2,
+                size: u32::try_from(picture.size()).unwrap(),
                 flags: [0x00, 0x00],
             },
             picture: Picture {
@@ -344,7 +351,7 @@ impl Id3v2Tag {
 
                 frame.header.size += u32::try_from(data_bytes.len() + 1).unwrap();
                 frame.header.flags = [0x00, 0x00];
-                frame.data = data_bytes;
+                frame.info.data = data_bytes;
             } else {
                 return Err("attempting to set a non-text frame as a picture frame".to_string());
             }
@@ -353,7 +360,8 @@ impl Id3v2Tag {
             self.header.size += u32::try_from(match &new_frame {
                 Frame::Text(x) => x.into_bytes().len(),
                 Frame::Picture(x) => x.into_bytes().len(),
-            }).unwrap();
+            })
+            .unwrap();
             self.frames.push(new_frame);
         }
 
@@ -371,12 +379,13 @@ impl Id3v2Tag {
             }
         } else {
             let new_frame = Frame::Picture(self.new_attached_picture_frame(picture));
-            
+
             self.header.size += u32::try_from(match &new_frame {
                 Frame::Text(x) => x.into_bytes().len(),
                 Frame::Picture(x) => x.into_bytes().len(),
-            }).unwrap();
-            
+            })
+            .unwrap();
+
             self.frames.push(new_frame);
         }
 
@@ -462,7 +471,7 @@ impl Id3v2Tag {
 
         let footer_bytes: Vec<u8> = match &self.footer {
             Some(f) => (*f.into_bytes()).to_vec(),
-            None => vec![]
+            None => vec![],
         };
 
         [
@@ -570,16 +579,21 @@ fn extract_tag(bytes: &Vec<u8>) -> (Vec<u8>, Vec<u8>) {
     )
 }
 
-fn extract_picture(encoding: u8, bytes: &Vec<u8>) -> Result<Picture, String> {
+fn extract_picture(bytes: &Vec<u8>) -> Result<Picture, String> {
+    let mut encoding_byte: u8 = 0x03;
     let mut mime_bytes: Vec<u8> = vec![];
     let mut picture_type_byte = 0x03;
     let mut description_bytes: Vec<u8> = vec![];
     let mut data_bytes: Vec<u8> = vec![];
 
-    let mut stage = "mime";
+    let mut stage = "encoding";
 
     for byte in bytes.iter() {
         match stage {
+            "encoding" => {
+                encoding_byte = *byte;
+                stage = "mime";
+            }
             "mime" => {
                 if *byte == 0x00 {
                     stage = "type";
@@ -606,7 +620,7 @@ fn extract_picture(encoding: u8, bytes: &Vec<u8>) -> Result<Picture, String> {
     }
 
     Ok(Picture {
-        encoding,
+        encoding: encoding_byte,
         mime: match String::from_utf8(mime_bytes).unwrap().as_str() {
             "image/png" => MimeType::Png,
             "image/jpeg" => MimeType::Jpeg,
@@ -629,36 +643,25 @@ fn parse_frame(bytes: &Vec<u8>) -> Result<Frame, String> {
         flags,
     };
 
-    let mut data = bytes[10..].to_vec();
-    let data_encoding: Option<u8> = match data[0] {
-        0x0 => Some(0x0),
-        0x1 => Some(0x1),
-        0x2 => Some(0x2),
-        0x3 => Some(0x3),
-        _ => None,
-    };
-
-    // Encoding byte (if present) shouldn't be with field data
-    if data_encoding.is_some() {
-        data = data[1..].to_vec();
-    }
-
+    let data = bytes[10..].to_vec();
     let binding = String::from_utf8(identifier.to_vec()).unwrap();
     let ascii_id = binding.as_str();
 
     match ascii_id {
         "TIT2" | "TALB" | "TPE1" | "TSSE" => Ok(Frame::Text(Id3v2TextFrame {
             header,
-            data_encoding,
-            data,
+            info: TextInformation {
+                encoding: data[0],
+                data: data[1..].to_vec(),
+            }
         })),
         "APIC" => {
-            let extracted_picture = extract_picture(data_encoding.unwrap(), &data).unwrap();
+            let extracted_picture = extract_picture(&data).unwrap();
 
             Ok(Frame::Picture(Id3v2PictureFrame {
                 header,
                 picture: Picture {
-                    encoding: data_encoding.unwrap(),
+                    encoding: extracted_picture.encoding,
                     mime: extracted_picture.mime,
                     picture_type: extracted_picture.picture_type,
                     description: extracted_picture.description,
@@ -827,6 +830,7 @@ fn main() {
 
     let cover_art_path = "./test.jpg";
     let cover_art_bytes = fs::read(cover_art_path).expect("file must exist");
+    println!("cover art bytes size: {:?}", cover_art_bytes.len());
 
     tag.set_song_title("Tag of Test".to_string()).unwrap();
     tag.set_song_artist_name("MC Test".to_string()).unwrap();
@@ -842,11 +846,9 @@ fn main() {
         }
     ).unwrap();
 
-    println!("{:#04X?}", tag);
-    println!("Result: {:#04X?}", tag.into_bytes());
-
+    println!("{:#?}", tag);
+    //println!("Result: {:#?}", tag.into_bytes());
 
     let tagged_path = "./tagged.mp3";
     let _ = fs::write(tagged_path, [tag.into_bytes(), audio_data].concat());
-    
 }
