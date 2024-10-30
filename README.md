@@ -2,7 +2,7 @@
 
 ## Description
 
-A tag editor for parsing, modifying, and writing ID3v2 metadata in MP3 files.
+A command-line tag editor for parsing, modifying, and writing ID3v2 metadata in MP3 files, written in Rust.
 
 ### Features
 
@@ -27,6 +27,9 @@ A tag editor for parsing, modifying, and writing ID3v2 metadata in MP3 files.
 #### Editing
 
 * [x] Modify supported frames in tags
+* [ ] Command-line interface
+  * [ ] Single file editing
+  * [ ] Bulk editing
 
 ### Usage
 
@@ -49,10 +52,13 @@ cargo build
 ```
 
 Run the executable directly:
+
 ```bash
 ./target/debug/alloy
 ```
+
 Or, use Cargo to run the executable:
+
 ```bash
 cargo run
 ```
