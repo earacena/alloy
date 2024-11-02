@@ -49,6 +49,10 @@ struct Args {
     /// Folder to output results of all the files in folder_input
     #[arg(long)]
     folder_output: Option<String>,
+
+    /// Reuse the filename as the title of the track (ignores -t and --track)
+    #[arg(long)]
+    reuse: bool,
 }
 
 fn process_folder(args: &mut Args) {
@@ -87,6 +91,26 @@ fn process_folder(args: &mut Args) {
                             .into_string()
                             .expect("must be readable file name"),
                 );
+
+                if args.reuse {
+                    let mut filename = file
+                        .file_name()
+                        .into_string()
+                        .expect("must be readable username");
+
+                    if let Some((left, _)) = filename.split_once(".") {
+                        filename = left.to_string();
+                    }
+
+                    println!(
+                        "Reusing filename as track title: {} (-r)",
+                        file.file_name()
+                            .into_string()
+                            .expect("must be readable file name")
+                    );
+
+                    args.track = Some(filename);
+                }
 
                 process_single_file(args);
             }
