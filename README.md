@@ -77,7 +77,7 @@ Or using Cargo in the project directory, passing arguments with ```--```:
 cargo run -- --help
 ```
 
-##### Single file example(s)
+##### Single file
 
 ```bash
 alloy --input-file "~/path/to/file.mp3" --output-file "~/path/to/output.mp3" -t "Track title" -n "Track artist" -a "Album title" -c "~/path/to/art.jpg" -d "description of picture"
@@ -85,10 +85,14 @@ alloy --input-file "~/path/to/file.mp3" --output-file "~/path/to/output.mp3" -t 
 
 Note: ```--reuse``` flag uses the name of the file (excluding extension) as the name of the track, ignoring what is passed to ```-t``` or ```--track``` arguments.
 
-##### Multiple files example
+##### Multiple files
 
 To tag multiple files, ensure that the files are in a folder containing only MP3 files, and tagging follows the same process as single file tagging:
 
 ```bash
 alloy --folder-input "~/path/to/folder" --folder-output "~/path/to/output/folder" -n "Example artist" -a "Example album" --reuse -c "~/path/to/art.jpg" -d "art description"
 ```
+
+### Disclaimer
+
+This is a work-in-progress tool, always make sure to backup all files before modifying them with this tool to prevent the risk of data corruption or loss. By using this tool, you acknowledge this risk and accept that I am not responsible for any and all data corruption or loss that may occur.
