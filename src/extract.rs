@@ -1,12 +1,13 @@
-use crate::utility;
 use crate::tag;
+use crate::utility;
 
 pub fn extract_tag(bytes: &Vec<u8>) -> (Vec<u8>, Vec<u8>) {
     // add 10 to include header size
-    let total_tag_size = utility::convert_safesynch_to_u32(bytes[6], bytes[7], bytes[8], bytes[9]) + 10;
+    let total_tag_size =
+        utility::convert_safesynch_to_u32(bytes[6], bytes[7], bytes[8], bytes[9]) + 10;
     let mut total_tag_size = usize::try_from(total_tag_size).unwrap();
 
-    println!("total tag size: {:#?}", total_tag_size);
+    // println!("total tag size: {:#?}", total_tag_size);
 
     // Footer might be present
     // Footer identifier is in reverse if file is read from start of file

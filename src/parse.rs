@@ -1,6 +1,6 @@
 use crate::extract;
-use crate::utility;
 use crate::tag;
+use crate::utility;
 
 pub fn parse_tag(bytes: &Vec<u8>) -> Result<tag::Id3v2Tag, String> {
     if bytes[0] != 0x49 || bytes[1] != 0x44 || bytes[2] != 0x33 {
@@ -11,19 +11,15 @@ pub fn parse_tag(bytes: &Vec<u8>) -> Result<tag::Id3v2Tag, String> {
         ));
     }
 
-    for byte in bytes {
-        print!("{:#04X?} ", byte);
-    }
+    // for byte in bytes {
+    //     print!("{:#04X?} ", byte);
+    // }
 
     let header_bytes = &bytes[..10];
     let header = parse_header(&header_bytes.to_vec());
     let extended_header = if header.flags & 0b01000000 != 0 {
-        let total_extended_header_size = utility::convert_safesynch_to_u32(
-            bytes[11],
-            bytes[12],
-            bytes[13],
-            bytes[14],
-        );
+        let total_extended_header_size =
+            utility::convert_safesynch_to_u32(bytes[11], bytes[12], bytes[13], bytes[14]);
 
         let total_extended_header_size = usize::try_from(total_extended_header_size).unwrap();
         let extended_header_bytes = &bytes[11..total_extended_header_size].to_vec();
