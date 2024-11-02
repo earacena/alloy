@@ -27,9 +27,9 @@ A command-line tag editor for parsing, modifying, and writing ID3v2 metadata in 
 #### Editing
 
 * [x] Modify supported frames in tags
-* [ ] Command-line interface
-  * [ ] Single file editing
-  * [ ] Bulk editing
+* [x] Command-line interface
+  * [x] Single file editing
+  * [x] Bulk editing
 
 ### Usage
 
