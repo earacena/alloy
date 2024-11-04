@@ -19,18 +19,18 @@ pub fn parse_tag(bytes: &Vec<u8>) -> Result<tag::Id3v2Tag, String> {
     let header = parse_header(&header_bytes.to_vec());
     let extended_header = if header.flags & 0b01000000 != 0 {
         let total_extended_header_size =
-            utility::convert_safesynch_to_u32(bytes[11], bytes[12], bytes[13], bytes[14]);
+            utility::convert_safesynch_to_u32(bytes[10], bytes[11], bytes[12], bytes[13]);
 
         let total_extended_header_size = usize::try_from(total_extended_header_size).unwrap();
-        let extended_header_bytes = &bytes[11..total_extended_header_size].to_vec();
+        let extended_header_bytes = &bytes[10..total_extended_header_size].to_vec();
         Some(parse_extended_header(extended_header_bytes))
     } else {
         None
     };
 
-    let footer_present = bytes[bytes.len() - 9] == 0x33
-        && bytes[bytes.len() - 10] == 0x44
-        && bytes[bytes.len() - 11] == 0x49;
+    let footer_present = bytes[bytes.len() - 10] == 0x33
+        && bytes[bytes.len() - 9] == 0x44
+        && bytes[bytes.len() - 8] == 0x49;
 
     // header is always 10 bytes
     // extended header might or might not be present
@@ -50,7 +50,7 @@ pub fn parse_tag(bytes: &Vec<u8>) -> Result<tag::Id3v2Tag, String> {
     let frame_bytes = &bytes[frames_start..frames_end].to_vec();
     let frames = parse_frames(frame_bytes);
     let footer: Option<tag::Id3v2Header> = if footer_present {
-        Some(parse_header(&bytes[frames_end + 1..].to_vec()))
+        Some(parse_header(&bytes.last_chunk::<10>().unwrap().to_vec()))
     } else {
         None
     };
@@ -140,7 +140,7 @@ fn parse_frame(bytes: &Vec<u8>) -> Result<tag::Frame, String> {
     let ascii_id = binding.as_str();
 
     match ascii_id {
-        "TIT2" | "TALB" | "TPE1" | "TSSE" => Ok(tag::Frame::Text(tag::Id3v2TextFrame {
+        "TIT2" | "TALB" | "TPE1" | "TPE2" | "TSSE" => Ok(tag::Frame::Text(tag::Id3v2TextFrame {
             header,
             info: tag::TextInformation {
                 encoding: data[0],
@@ -182,10 +182,20 @@ fn parse_frames(bytes: &Vec<u8>) -> Vec<tag::Frame> {
             break;
         }
 
+        // A frame must at the very least 11 bytes (header + 1 byte of data)
+        // not fulfilling this likely means a frame was encoded into bytes
+        // incorrectly
+        if frame_bytes[idx..].len() < 11 {
+            println!("[warning] unexpected misshaped final frame");
+            return frames;
+        }
+
+        // println!("{:?}", frame_bytes[idx..].to_vec());
+
         let (unparsed_frame_bytes, end) = extract::extract_frame(idx, &frame_bytes);
 
         frames.push(parse_frame(&unparsed_frame_bytes).unwrap());
-        idx += end + 1;
+        idx = end;
     }
 
     frames

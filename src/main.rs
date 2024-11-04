@@ -60,7 +60,17 @@ fn process_folder(args: &mut Args) {
     if let Some(folder_path) = &args.folder_input {
         println!("Processing folder: {}", folder_path);
 
-        if let Some(output_path) = &args.folder_output {
+        if let Some(output_folder) = &args.folder_output {
+            let input_path = match folder_path.strip_suffix("/") {
+                Some(x) => x,
+                None => folder_path,
+            };
+
+            let output_path = match output_folder.strip_suffix("/") {
+                Some(x) => x,
+                None => output_folder,
+            };
+
             fs::create_dir_all(output_path).unwrap();
 
             for file in
@@ -77,14 +87,14 @@ fn process_folder(args: &mut Args) {
 
                 args.input_file = Some(format!(
                     "{}/{}",
-                    folder_path,
+                    input_path,
                     file.file_name()
                         .into_string()
                         .expect("must be readable file name"),
                 ));
 
                 args.output_file = Some(
-                    output_path.replace("\"", "")
+                    output_path.to_string()
                         + "/tagged-"
                         + &file
                             .file_name()

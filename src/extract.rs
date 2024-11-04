@@ -20,7 +20,7 @@ pub fn extract_tag(bytes: &Vec<u8>) -> (Vec<u8>, Vec<u8>) {
 
     (
         bytes[..total_tag_size].to_vec(),
-        bytes[(total_tag_size + 1)..].to_vec(),
+        bytes[total_tag_size..].to_vec(),
     )
 }
 
@@ -87,6 +87,14 @@ pub fn extract_frame(idx: usize, bytes: &Vec<u8>) -> (Vec<u8>, usize) {
 
     let start = idx;
     let end = idx + usize::try_from(total_frame_size).unwrap();
+
+    println!(
+        "start: {:?} , end: {:?}, frame total: {:?}, bytes_total: {:?}",
+        start,
+        end,
+        total_frame_size,
+        bytes.len(),
+    );
 
     return (bytes[start..end].to_vec(), end);
 }

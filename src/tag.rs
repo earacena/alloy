@@ -23,9 +23,7 @@ impl MimeType {
     }
 
     fn into_bytes(&self) -> Vec<u8> {
-        let mut bytes = self.to_string().into_bytes();
-        bytes.push(0x00);
-        bytes
+        self.to_string().into_bytes()
     }
 }
 
@@ -114,13 +112,30 @@ impl Id3v2FrameHeader {
 
 #[derive(Debug)]
 pub struct Id3v2TextFrame {
-     pub(crate) header: Id3v2FrameHeader,
-     pub(crate) info: TextInformation,
+    pub(crate) header: Id3v2FrameHeader,
+    pub(crate) info: TextInformation,
 }
 
 impl Id3v2TextFrame {
     fn into_bytes(&self) -> Vec<u8> {
         [self.header.into_bytes(), self.info.into_bytes()].concat()
+    }
+}
+
+#[derive(Debug)]
+pub struct TextInformation {
+    pub(crate) encoding: u8,
+    pub(crate) data: Vec<u8>,
+}
+
+impl TextInformation {
+    fn into_bytes(&self) -> Vec<u8> {
+        [
+            vec![self.encoding],
+            self.data.clone(),
+            vec![0x00], // Used to terminate string in data field
+        ]
+        .concat()
     }
 }
 
@@ -150,15 +165,16 @@ pub struct Picture {
 
 impl Picture {
     fn into_bytes(&self) -> Vec<u8> {
-        let mut description_bytes = self.description.clone().into_bytes();
-        description_bytes.push(0x00);
+        let description_bytes = self.description.clone().into_bytes();
         let mime_bytes = self.mime.into_bytes();
 
         [
             vec![self.encoding],
             mime_bytes,
+            vec![0x00], // Used to terminate mime string
             vec![self.picture_type],
             description_bytes,
+            vec![0x00], // Used to terminate description string
             self.data.clone(),
         ]
         .concat()
@@ -166,18 +182,6 @@ impl Picture {
 
     fn size(&self) -> usize {
         self.into_bytes().len()
-    }
-}
-
-#[derive(Debug)]
-pub struct TextInformation {
-    pub(crate) encoding: u8,
-    pub(crate) data: Vec<u8>,
-}
-
-impl TextInformation {
-    fn into_bytes(&self) -> Vec<u8> {
-        [vec![self.encoding], self.data.clone()].concat()
     }
 }
 
@@ -214,6 +218,7 @@ impl Id3v2Tag {
     fn new_text_frame(&mut self, frame_id: &str, encoding: u8, data: Vec<u8>) -> Id3v2TextFrame {
         let id_bytes = frame_id.as_bytes();
         let new_frame = Id3v2TextFrame {
+            // size has an additional byte for encoding
             header: Id3v2FrameHeader {
                 identifier: [id_bytes[0], id_bytes[1], id_bytes[2], id_bytes[3]],
                 size: u32::try_from(data.len()).unwrap() + 1,
@@ -248,8 +253,7 @@ impl Id3v2Tag {
         let result = self.find_frame(frame_id);
         if let Some(x) = result {
             if let Frame::Text(frame) = x {
-                let mut data_bytes = data.into_bytes();
-                data_bytes.push(0x00);
+                let data_bytes = data.into_bytes();
 
                 frame.header.size += u32::try_from(data_bytes.len() + 1).unwrap();
                 frame.header.flags = [0x00, 0x00];
