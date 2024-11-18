@@ -11,9 +11,9 @@ pub fn extract_tag(bytes: &Vec<u8>) -> (Vec<u8>, Vec<u8>) {
 
     // Footer might be present
     // Footer identifier is in reverse if file is read from start of file
-    if bytes[total_tag_size + 10] == 0x33
-        && bytes[total_tag_size + 11] == 0x44
-        && bytes[total_tag_size + 12] == 0x49
+    if bytes[bytes.len() - 10] == 0x33
+        && bytes[bytes.len() - 9] == 0x44
+        && bytes[bytes.len() - 8] == 0x49
     {
         total_tag_size += 10;
     }
@@ -42,9 +42,9 @@ pub fn extract_picture(bytes: &Vec<u8>) -> Result<tag::Picture, String> {
             "mime" => {
                 if *byte == 0x00 {
                     stage = "type";
-                } else {
-                    mime_bytes.push(*byte);
                 }
+
+                mime_bytes.push(*byte);
             }
             "type" => {
                 picture_type_byte = *byte;
@@ -53,9 +53,9 @@ pub fn extract_picture(bytes: &Vec<u8>) -> Result<tag::Picture, String> {
             "description" => {
                 if *byte == 0x00 {
                     stage = "data";
-                } else {
-                    description_bytes.push(*byte);
                 }
+
+                description_bytes.push(*byte);
             }
             "data" => {
                 data_bytes.push(*byte);
@@ -66,11 +66,7 @@ pub fn extract_picture(bytes: &Vec<u8>) -> Result<tag::Picture, String> {
 
     Ok(tag::Picture {
         encoding: encoding_byte,
-        mime: match String::from_utf8(mime_bytes).unwrap().as_str() {
-            "image/png" => tag::MimeType::Png,
-            "image/jpeg" => tag::MimeType::Jpeg,
-            _ => tag::MimeType::Unknown,
-        },
+        mime: String::from_utf8(mime_bytes).unwrap(),
         picture_type: picture_type_byte,
         description: String::from_utf8(description_bytes).unwrap(),
         data: data_bytes,
@@ -83,18 +79,10 @@ pub fn extract_frame(idx: usize, bytes: &Vec<u8>) -> (Vec<u8>, usize) {
         bytes[idx + 5],
         bytes[idx + 6],
         bytes[idx + 7],
-    ) + 10;
+    );
 
     let start = idx;
-    let end = idx + usize::try_from(total_frame_size).unwrap();
-
-    println!(
-        "start: {:?} , end: {:?}, frame total: {:?}, bytes_total: {:?}",
-        start,
-        end,
-        total_frame_size,
-        bytes.len(),
-    );
+    let end = idx + usize::try_from(total_frame_size).unwrap() + 10;
 
     return (bytes[start..end].to_vec(), end);
 }

@@ -1,5 +1,5 @@
 use clap::Parser;
-use std::{fs, time::Instant};
+use std::{ffi::OsStr, fs, path, time::Instant};
 
 mod extract;
 mod parse;
@@ -42,7 +42,7 @@ struct Args {
     #[arg(short, long)]
     output_file: Option<String>,
 
-    /// Folder with files to tag (MP3 files only)
+    /// Folder with files to tag (MP3 files only), will override --input_file (-i) and --output_file (-o)
     #[arg(long)]
     folder_input: Option<String>,
 
@@ -159,11 +159,25 @@ fn process_single_file(args: &Args) {
             if let Some(x) = &args.cover_art_path {
                 if let Some(y) = &args.description {
                     let cover_art_bytes = fs::read(x).expect("must be readable file");
+
+                    let file_extension = match path::Path::new(x)
+                        .extension()
+                        .and_then(OsStr::to_str)
+                        .unwrap()
+                    {
+                        "jpg" => "jpg",
+                        "png" => "png",
+                        _ => {
+                            eprintln!("cover art picture must be either a .jpg or .png file.");
+                            return;
+                        }
+                    };
+
                     tag.set_cover_art(tag::Picture {
                         encoding: 0x03,
-                        mime: tag::MimeType::Jpeg,
+                        mime: "image/".to_owned() + file_extension + "\0",
                         picture_type: 0x03,
-                        description: y.to_string(),
+                        description: y.to_string() + "\0",
                         data: cover_art_bytes,
                     })
                     .unwrap();
@@ -175,26 +189,28 @@ fn process_single_file(args: &Args) {
             // println!("cover art bytes size: {:?}", cover_art_bytes.len());
 
             if let Some(x) = &args.track {
-                tag.set_song_title(x.to_string()).unwrap();
+                tag.set_song_title(x.to_string() + "\0").unwrap();
             }
 
             if let Some(x) = &args.name {
-                tag.set_song_artist_name(x.to_string()).unwrap();
+                tag.set_song_artist_name(x.to_string() + "\0").unwrap();
             }
 
             if let Some(x) = &args.album {
-                tag.set_album_title(x.to_string()).unwrap();
+                tag.set_album_title(x.to_string() + "\0").unwrap();
             }
 
             if let Some(x) = &args.main_artist {
-                tag.set_album_artist_name(x.to_string()).unwrap();
+                tag.set_album_artist_name(x.to_string() + "\0").unwrap();
             }
 
             let _ = fs::write(output.clone(), [tag.into_bytes(), audio_data].concat());
 
-            println!("\n");
-            println!("Time elapsed: {}ms", now.elapsed().as_millis());
-            println!("File successfully tagged, output saved to path: {}", output);
+            println!(
+                "{:?} | File successfully tagged, saved to {}",
+                now.elapsed(),
+                output
+            );
 
             return;
         }

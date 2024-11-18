@@ -22,7 +22,7 @@ pub fn parse_tag(bytes: &Vec<u8>) -> Result<tag::Id3v2Tag, String> {
             utility::convert_safesynch_to_u32(bytes[10], bytes[11], bytes[12], bytes[13]);
 
         let total_extended_header_size = usize::try_from(total_extended_header_size).unwrap();
-        let extended_header_bytes = &bytes[10..total_extended_header_size].to_vec();
+        let extended_header_bytes = &bytes[10..total_extended_header_size + 10].to_vec();
         Some(parse_extended_header(extended_header_bytes))
     } else {
         None
@@ -55,16 +55,26 @@ pub fn parse_tag(bytes: &Vec<u8>) -> Result<tag::Id3v2Tag, String> {
         None
     };
 
-    Ok(tag::Id3v2Tag {
+    let result = Ok(tag::Id3v2Tag {
         header,
         extended_header,
         frames,
         footer,
-    })
+    });
+
+    result
 }
 
 fn parse_extended_header(bytes: &Vec<u8>) -> tag::Id3v2ExtendedHeader {
     let size: u32 = utility::convert_safesynch_to_u32(bytes[0], bytes[1], bytes[2], bytes[3]);
+
+    assert!(
+        bytes.len() == usize::try_from(size).unwrap() + 10,
+        "parse_extended_header() must be given a bytes vector with a length of {}, length = {}",
+        size + 10,
+        bytes.len()
+    );
+
     let number_of_flag_bytes = bytes[4];
     let flags = bytes[5];
 
@@ -111,6 +121,12 @@ fn parse_extended_header(bytes: &Vec<u8>) -> tag::Id3v2ExtendedHeader {
 }
 
 fn parse_header(bytes: &Vec<u8>) -> tag::Id3v2Header {
+    assert!(
+        bytes.len() == 10,
+        "parse_header() requires a vector of length 10, length = {}",
+        bytes.len(),
+    );
+
     let identifier = [bytes[0], bytes[1], bytes[2]];
     let version = [bytes[3], bytes[4]];
     let flags = bytes[5];
@@ -186,7 +202,10 @@ fn parse_frames(bytes: &Vec<u8>) -> Vec<tag::Frame> {
         // not fulfilling this likely means a frame was encoded into bytes
         // incorrectly
         if frame_bytes[idx..].len() < 11 {
-            println!("[warning] unexpected misshaped final frame");
+            println!(
+                "[warning] unexpected misshaped final frame: {}",
+                String::from_utf8(frame_bytes[idx..].to_vec()).unwrap()
+            );
             return frames;
         }
 

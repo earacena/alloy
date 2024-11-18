@@ -1,30 +1,12 @@
-use crate::utility;
+use core::fmt;
+use std::mem;
 
-#[derive(Debug)]
-pub enum MimeType {
-    Png,
-    Jpeg,
-    Unknown,
-}
+use crate::utility::{self, convert_u32_to_safesynch};
 
 #[derive(Debug)]
 pub enum Frame {
     Text(Id3v2TextFrame),
     Picture(Id3v2PictureFrame),
-}
-
-impl MimeType {
-    fn to_string(&self) -> String {
-        match self {
-            MimeType::Jpeg => "image/jpeg".to_string(),
-            MimeType::Png => "image/png".to_string(),
-            MimeType::Unknown => "image/".to_string(),
-        }
-    }
-
-    fn into_bytes(&self) -> Vec<u8> {
-        self.to_string().into_bytes()
-    }
 }
 
 #[derive(Debug)]
@@ -122,20 +104,25 @@ impl Id3v2TextFrame {
     }
 }
 
-#[derive(Debug)]
 pub struct TextInformation {
     pub(crate) encoding: u8,
     pub(crate) data: Vec<u8>,
 }
 
+impl fmt::Debug for TextInformation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "TextInformation [{} '{}']",
+            self.encoding,
+            String::from_utf8(self.data.clone()).unwrap()
+        )
+    }
+}
+
 impl TextInformation {
     fn into_bytes(&self) -> Vec<u8> {
-        [
-            vec![self.encoding],
-            self.data.clone(),
-            vec![0x00], // Used to terminate string in data field
-        ]
-        .concat()
+        [vec![self.encoding], self.data.clone()].concat()
     }
 }
 
@@ -154,27 +141,39 @@ impl Id3v2PictureFrame {
     }
 }
 
-#[derive(Debug)]
 pub struct Picture {
     pub(crate) encoding: u8, // 0x03 for utf-8
-    pub(crate) mime: MimeType,
+    pub(crate) mime: String,
     pub(crate) picture_type: u8, // 0x03 for cover art
     pub(crate) description: String,
     pub(crate) data: Vec<u8>,
 }
 
+impl fmt::Debug for Picture {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Picture [{} '{}' {} '{}' first five: {:?} last five: {:?}]",
+            self.encoding,
+            self.mime,
+            self.picture_type,
+            self.description,
+            self.data[..5].to_vec(),
+            self.data[self.data.len() - 5..].to_vec(),
+        )
+    }
+}
+
 impl Picture {
     fn into_bytes(&self) -> Vec<u8> {
         let description_bytes = self.description.clone().into_bytes();
-        let mime_bytes = self.mime.into_bytes();
+        let mime_bytes = self.mime.clone().into_bytes();
 
         [
             vec![self.encoding],
             mime_bytes,
-            vec![0x00], // Used to terminate mime string
             vec![self.picture_type],
             description_bytes,
-            vec![0x00], // Used to terminate description string
             self.data.clone(),
         ]
         .concat()
@@ -194,27 +193,6 @@ pub struct Id3v2Tag {
 }
 
 impl Id3v2Tag {
-    fn find_frame(&mut self, frame_id: &str) -> Option<&mut Frame> {
-        for frame in self.frames.iter_mut() {
-            match frame {
-                Frame::Text(x) => {
-                    if x.header.id_str() == frame_id {
-                        return Some(frame);
-                    }
-                }
-                Frame::Picture(x) => {
-                    if x.header.id_str() == frame_id {
-                        return Some(frame);
-                    }
-                }
-            }
-
-            continue;
-        }
-
-        return None;
-    }
-
     fn new_text_frame(&mut self, frame_id: &str, encoding: u8, data: Vec<u8>) -> Id3v2TextFrame {
         let id_bytes = frame_id.as_bytes();
         let new_frame = Id3v2TextFrame {
@@ -250,16 +228,21 @@ impl Id3v2Tag {
     }
 
     fn set_text_frame(&mut self, frame_id: &str, data: String) -> Result<(), String> {
-        let result = self.find_frame(frame_id);
-        if let Some(x) = result {
-            if let Frame::Text(frame) = x {
-                let data_bytes = data.into_bytes();
+        // Find frame
+        let frame_idx = self.frames.iter().position(|x| match x {
+            Frame::Text(x) => x.header.id_str() == frame_id,
+            _ => false,
+        });
 
-                frame.header.size += u32::try_from(data_bytes.len() + 1).unwrap();
-                frame.header.flags = [0x00, 0x00];
-                frame.info.data = data_bytes;
-            } else {
-                return Err("attempting to set a non-text frame as a picture frame".to_string());
+        if let Some(idx) = frame_idx {
+            if let Frame::Text(prev_frame) = &self.frames[idx] {
+                self.header.size -= u32::try_from(prev_frame.into_bytes().len()).unwrap();
+
+                let data_bytes = data.into_bytes();
+                let new_frame = self.new_text_frame(frame_id, 0x03, data_bytes);
+
+                self.header.size += u32::try_from(new_frame.into_bytes().len()).unwrap();
+                self.frames[idx] = Frame::Text(new_frame);
             }
         } else {
             let new_frame = Frame::Text(self.new_text_frame(frame_id, 0x03, data.into_bytes()));
@@ -275,11 +258,18 @@ impl Id3v2Tag {
     }
 
     fn set_attached_picture_frame(&mut self, picture: Picture) -> Result<(), String> {
-        let result = self.find_frame("APIC");
-        if let Some(x) = result {
-            if let Frame::Picture(frame) = x {
-                frame.header.size = u32::try_from(picture.size()).unwrap();
-                frame.picture = picture;
+        let frame_idx = self.frames.iter().position(|x| match x {
+            Frame::Text(x) => x.header.id_str() == "APIC",
+            _ => false,
+        });
+
+        if let Some(idx) = frame_idx {
+            if let Frame::Picture(prev_frame) = &self.frames[idx] {
+                self.header.size -= u32::try_from(prev_frame.picture.size()).unwrap();
+                self.header.size += u32::try_from(picture.size()).unwrap();
+
+                let new_frame = Frame::Picture(self.new_attached_picture_frame(picture));
+                self.frames[idx] = new_frame;
             } else {
                 return Err("attempting to set a non-text frame as a picture frame".to_string());
             }
@@ -375,17 +365,38 @@ impl Id3v2Tag {
             frames_bytes.append(&mut bytes);
         }
 
+        // -10 to account for header size that is not counted
+        let mut total_size: i32 = -10;
         let footer_bytes: Vec<u8> = match &self.footer {
-            Some(f) => (*f.into_bytes()).to_vec(),
+            Some(f) => {
+                // Account for footer size
+                total_size -= 10;
+                (*f.into_bytes()).to_vec()
+            }
             None => vec![],
         };
 
-        [
+        let mut result = [
             header_bytes,
             extended_header_bytes,
             frames_bytes,
             footer_bytes,
         ]
-        .concat()
+        .concat();
+
+        total_size += i32::try_from(result.len()).unwrap();
+        // Ensure header size is accurate by updating total number of bytes
+        let size_bytes = convert_u32_to_safesynch(u32::try_from(total_size).unwrap());
+        // 6 7 8 9
+        result[6] = size_bytes[0];
+        result[7] = size_bytes[1];
+        result[8] = size_bytes[2];
+        result[9] = size_bytes[3];
+
+        // for byte in &result {
+        //     print!("{} ", byte);
+        // }
+
+        result
     }
 }
